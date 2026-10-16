@@ -131,7 +131,11 @@ async function queryJooble(params, env) {
   try {
     response = await fetch(`https://${host}/api/${encodeURIComponent(env.JOOBLE_API_KEY)}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'User-Agent': 'JobRadar/0.1 (+https://github.com/luis2d/jobradar)',
+      },
       body: JSON.stringify(body),
       signal: controller.signal,
     });
@@ -144,6 +148,10 @@ async function queryJooble(params, env) {
     clearTimeout(timer);
   }
 
+  // Jooble está detrás de Cloudflare: un reto anti-bots no significa que la clave sea mala.
+  if (response.headers.get('cf-mitigated') === 'challenge') {
+    throw new PublicError('Jooble bloqueó temporalmente la consulta del servidor. Intenta más tarde.', 503);
+  }
   if (response.status === 403 || response.status === 401) {
     throw new PublicError('La clave de Jooble no es válida o fue revocada.', 502);
   }
