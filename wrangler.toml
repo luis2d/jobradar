@@ -1,0 +1,20 @@
+name = "jobradar"
+main = "backend/worker.js"
+compatibility_date = "2026-09-01"
+
+# El mismo Worker sirve el frontend (frontend/) y la API (/api/*),
+# así ambos comparten origen y no hay problemas de CORS en producción.
+[assets]
+directory = "./frontend"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
+[vars]
+CACHE_TTL_SECONDS = "900"
+# Dominio de la API de Jooble. Si tu clave es de un país, p. ej. "mx.jooble.org".
+JOOBLE_HOST = "jooble.org"
+# Orígenes permitidos separados por coma, o "*".
+ALLOWED_ORIGINS = "*"
+
+# La clave NO va aquí. En producción: npx wrangler secret put JOOBLE_API_KEY
+# En local: copia .env.example a .env y llénala.
