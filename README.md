@@ -19,14 +19,17 @@ Buscador de vacantes reales en línea. El usuario escribe una profesión (o elig
 ## Estructura propuesta
 
 ```
-vacante/
+jobradar/
 ├── README.md
 ├── frontend/
 │   └── index.html          # Interfaz: buscador, filtros y resultados
 ├── backend/
-│   ├── worker.js           # Función serverless que consulta Jooble
+│   ├── worker.js           # Worker que consulta Jooble y cachea
 │   ├── normalize.js        # Convierte resultados a un formato común
+│   ├── normalize.test.js   # Pruebas (npm test)
 │   └── config.js           # Portales de respaldo y patrones de URL
+├── wrangler.toml           # Config de Cloudflare: el Worker sirve frontend y /api/*
+├── package.json
 └── .env.example            # Variables de entorno (sin valores reales)
 ```
 
@@ -36,7 +39,26 @@ vacante/
 - Node.js 18 o superior, para correr pruebas locales con Wrangler (si usas Cloudflare).
 - Clave gratuita de Jooble.
 
-## Pasos para iniciar
+## Uso rápido
+
+```bash
+npm install
+copy .env.example .env      # y pon tu JOOBLE_API_KEY
+npm run dev                 # abre http://127.0.0.1:8787
+npm test
+```
+
+Para publicar: `npx wrangler login`, `npx wrangler secret put JOOBLE_API_KEY` y `npm run deploy`.
+
+Si tu clave de Jooble es de un país específico, cambia `JOOBLE_HOST` en `wrangler.toml` (por ejemplo, `mx.jooble.org`).
+
+### API del backend
+
+`GET /api/search?keywords=contador&location=Guadalajara&page=1&radius=16&days=7&salary=15000`
+
+Devuelve `{ total, page, hasMore, jobs: [...], links: [...], cached }`. Cada vacante trae `title`, `company`, `location`, `salary` (o `null`), `type`, `snippet`, `date`, `url`, `via` y `origin`. Los errores responden `{ error, links }`.
+
+## Pasos para iniciar (guía original)
 
 1. **Obtén la clave de Jooble.** Entra a jooble.org/api/about, completa el formulario con tu nombre, correo y sitio web, y guarda la clave que te entregan. Confirma en su documentación los límites de uso y los países disponibles, incluido México.
 
@@ -55,9 +77,9 @@ vacante/
 
 5. **Conecta el frontend.** El buscador de la izquierda llama a tu backend, no a Jooble directamente. Los resultados se muestran a la derecha.
 
-6. **Prueba en local.** Con Wrangler ejecuta `wrangler dev` y abre `frontend/index.html`. Prueba búsquedas vacías, búsquedas sin resultados y errores de red.
+6. **Prueba en local.** Con Wrangler ejecuta `npm run dev` y abre http://127.0.0.1:8787 (el mismo Worker sirve la página). Prueba búsquedas vacías, búsquedas sin resultados y errores de red.
 
-7. **Publica.** Despliega el backend con `wrangler deploy` y sube el frontend a Cloudflare Pages, Vercel o Netlify.
+7. **Publica.** `npm run deploy` publica backend y frontend juntos en Cloudflare Workers.
 
 ## Reglas del proyecto
 
@@ -77,9 +99,9 @@ vacante/
 ## Próximos pasos
 
 - [ ] Obtener la clave de Jooble y confirmar cobertura para México.
-- [ ] Escribir `worker.js` y `normalize.js`.
-- [ ] Conectar el buscador con el backend.
-- [ ] Agregar caché y manejo de errores.
+- [x] Escribir `worker.js` y `normalize.js`.
+- [x] Conectar el buscador con el backend.
+- [x] Agregar caché y manejo de errores.
 - [ ] Revisar si Adzuna conviene como segunda fuente para otros países.
 - [ ] Publicar la versión de prueba.
 
