@@ -59,14 +59,14 @@ export function dedupeKey(job) {
   return `${comparable(job.title)}|${comparable(job.company)}`;
 }
 
-export function normalizeJob(raw) {
+export function normalizeJoobleJob(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const title = cleanText(raw.title);
   const url = safeUrl(raw.link);
   if (!title || !url) return null;
 
   const job = {
-    id: String(raw.id ?? url),
+    id: `jooble:${raw.id ?? url}`,
     title,
     company: cleanText(raw.company) || 'Empresa confidencial',
     location: cleanText(raw.location) || 'Ubicación no especificada',
@@ -83,15 +83,78 @@ export function normalizeJob(raw) {
   return job;
 }
 
-export function normalizeJobs(rawJobs) {
-  if (!Array.isArray(rawJobs)) return [];
+const mxn = new Intl.NumberFormat('es-MX', { maximumFractionDigits: 0 });
+
+// Adzuna publica salarios anuales. Si el salario es estimado por Adzuna
+// (salary_is_predicted = "1"), no lo mostramos: no inventamos salarios.
+export function adzunaSalary(raw) {
+  if (String(raw.salary_is_predicted) === '1') return null;
+  const min = Number(raw.salary_min) || 0;
+  const max = Number(raw.salary_max) || 0;
+  if (!min && !max) return null;
+  const low = min || max;
+  const high = Math.max(min, max);
+  const yearly = low === high ? `$${mxn.format(low)}` : `$${mxn.format(low)} – $${mxn.format(high)}`;
+  const monthly =
+    low === high
+      ? `$${mxn.format(low / 12)}`
+      : `$${mxn.format(low / 12)} – $${mxn.format(high / 12)}`;
+  return `${yearly} al año (≈ ${monthly}/mes)`;
+}
+
+const ADZUNA_TIME = { full_time: 'Tiempo completo', part_time: 'Medio tiempo' };
+const ADZUNA_CONTRACT = { permanent: 'Indefinido', contract: 'Por contrato' };
+
+export function normalizeAdzunaJob(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const title = cleanText(raw.title);
+  const url = safeUrl(raw.redirect_url);
+  if (!title || !url) return null;
+
+  const type = [ADZUNA_TIME[raw.contract_time], ADZUNA_CONTRACT[raw.contract_type]]
+    .filter(Boolean)
+    .join(' · ');
+
+  const job = {
+    id: `adzuna:${raw.id ?? url}`,
+    title,
+    company: cleanText(raw.company?.display_name) || 'Empresa confidencial',
+    location: cleanText(raw.location?.display_name) || 'Ubicación no especificada',
+    salary: adzunaSalary(raw),
+    type: type || null,
+    snippet: cleanText(raw.description),
+    date: safeDate(raw.created),
+    url,
+    via: 'Adzuna',
+    origin: null,
+  };
+  job.key = dedupeKey(job);
+  return job;
+}
+
+// Quita duplicados (también entre fuentes) y conserva el orden.
+export function dedupeJobs(jobs) {
   const seen = new Set();
-  const jobs = [];
-  for (const raw of rawJobs) {
-    const job = normalizeJob(raw);
+  const out = [];
+  for (const job of jobs) {
     if (!job || seen.has(job.key)) continue;
     seen.add(job.key);
-    jobs.push(job);
+    out.push(job);
   }
-  return jobs;
+  return out;
+}
+
+export function normalizeJobs(rawJobs, normalizer = normalizeJoobleJob) {
+  if (!Array.isArray(rawJobs)) return [];
+  return dedupeJobs(rawJobs.map(normalizer));
+}
+
+// Intercala las listas de cada fuente para que ninguna quede siempre al final.
+export function interleave(...lists) {
+  const out = [];
+  const longest = Math.max(0, ...lists.map((l) => l.length));
+  for (let i = 0; i < longest; i++) {
+    for (const list of lists) if (i < list.length) out.push(list[i]);
+  }
+  return out;
 }

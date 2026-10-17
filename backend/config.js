@@ -4,6 +4,11 @@ export const RESULTS_PER_PAGE = 20;
 export const MAX_PAGE = 20;
 export const JOOBLE_TIMEOUT_MS = 8000;
 
+export const ADZUNA_COUNTRY = 'mx';
+export const ADZUNA_TIMEOUT_MS = 8000;
+// Si Adzuna rechaza las credenciales o se acaba la cuota, dejamos de llamarla un rato.
+export const ADZUNA_PAUSE_MS = 10 * 60 * 1000;
+
 // Valores de radio (km) que acepta Jooble.
 export const ALLOWED_RADIUS = [0, 8, 16, 24, 40, 80];
 

@@ -412,7 +412,8 @@
   </main>
 
   <footer>
-    Resultados vía <a href="https://jooble.org" target="_blank" rel="noopener noreferrer">Jooble</a>.
+    Resultados vía <a href="https://jooble.org" target="_blank" rel="noopener noreferrer">Jooble</a>
+    y <a href="https://www.adzuna.com.mx" target="_blank" rel="noopener noreferrer">Adzuna</a>.
     Los enlaces a Indeed, Computrabajo y LinkedIn son búsquedas de apoyo en esos sitios, no resultados de JobRadar.
     No guardamos tus datos.
   </footer>
@@ -443,6 +444,7 @@
       loading: false,
       error: null,
       cached: false,
+      failedSources: [],
     };
     let requestId = 0;
 
@@ -524,7 +526,7 @@
       }
 
       if (!append) {
-        Object.assign(state, { query, jobs: [], seen: new Set(), total: 0, page: 0, hasMore: false, links: [] });
+        Object.assign(state, { query, jobs: [], seen: new Set(), total: 0, page: 0, hasMore: false, links: [], failedSources: [] });
         syncUrl(query);
       }
       const page = state.page + 1;
@@ -556,6 +558,7 @@
         state.page = page;
         state.hasMore = Boolean(data.hasMore);
         state.cached = Boolean(data.cached);
+        state.failedSources = Array.isArray(data.failedSources) ? data.failedSources : [];
       } catch (err) {
         if (myId !== requestId) return;
         state.error = err instanceof TypeError
@@ -653,6 +656,11 @@
               ? `${numberFmt.format(jobs.length)} mostradas de ~${numberFmt.format(state.total)} encontradas`
               : 'Sin resultados'),
         ));
+
+        if (state.failedSources.length) {
+          nodes.push(el('div', { class: 'notice notice-warn' },
+            `${state.failedSources.join(' y ')} no respondió en este momento; mostramos los resultados de las demás fuentes.`));
+        }
 
         if (!state.jobs.length) {
           nodes.push(stateBox('No encontramos vacantes', 'Prueba con otra palabra (por ejemplo, un sinónimo), quita la ciudad o amplía la distancia. También puedes revisar los portales de abajo.'));

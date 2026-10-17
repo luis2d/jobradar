@@ -1,8 +1,11 @@
-// Cloudflare Worker: recibe búsquedas del frontend, consulta Jooble y cachea resultados.
-// La clave de Jooble vive solo aquí (secreto JOOBLE_API_KEY), nunca en el HTML.
+// Cloudflare Worker: recibe búsquedas del frontend, consulta Jooble y Adzuna, y cachea resultados.
+// Las claves viven solo aquí (secretos de Cloudflare), nunca en el HTML.
 
-import { normalizeJobs } from './normalize.js';
+import { dedupeJobs, interleave, normalizeAdzunaJob, normalizeJobs } from './normalize.js';
 import {
+  ADZUNA_COUNTRY,
+  ADZUNA_PAUSE_MS,
+  ADZUNA_TIMEOUT_MS,
   ALLOWED_DAYS,
   ALLOWED_RADIUS,
   JOOBLE_TIMEOUT_MS,
@@ -12,7 +15,10 @@ import {
 } from './config.js';
 
 const MEMORY_CACHE_LIMIT = 200;
+// Si una fuente falla, cacheamos el resultado parcial poco tiempo para reintentar pronto.
+const PARTIAL_CACHE_TTL = 60;
 const memoryCache = new Map();
+let adzunaPausedUntil = 0;
 
 class PublicError extends Error {
   constructor(message, status) {
@@ -20,6 +26,15 @@ class PublicError extends Error {
     this.status = status;
   }
 }
+
+const SOURCES = [
+  { name: 'Jooble', enabled: (env) => Boolean(env.JOOBLE_API_KEY), query: queryJooble },
+  {
+    name: 'Adzuna',
+    enabled: (env) => Boolean(env.ADZUNA_APP_ID && env.ADZUNA_APP_KEY),
+    query: queryAdzuna,
+  },
+];
 
 export default {
   async fetch(request, env, ctx) {
@@ -30,7 +45,7 @@ export default {
       return new Response(null, { status: 204, headers: cors });
     }
     if (url.pathname === '/api/health') {
-      return json({ ok: true }, 200, cors);
+      return json({ ok: true, sources: SOURCES.filter((s) => s.enabled(env)).map((s) => s.name) }, 200, cors);
     }
     if (url.pathname !== '/api/search') {
       return json({ error: 'Ruta no encontrada.' }, 404, cors);
@@ -45,9 +60,10 @@ export default {
     if (!params.keywords) {
       return json({ error: 'Escribe una profesión o palabra clave.', links }, 400, cors);
     }
-    if (!env.JOOBLE_API_KEY) {
+    const sources = SOURCES.filter((s) => s.enabled(env));
+    if (!sources.length) {
       return json(
-        { error: 'El servidor no tiene configurada la clave de Jooble.', links },
+        { error: 'El servidor no tiene configurada ninguna fuente de vacantes.', links },
         500,
         cors,
       );
@@ -61,20 +77,38 @@ export default {
       return json({ ...cached, links, cached: true }, 200, cors);
     }
 
-    let data;
-    try {
-      data = await queryJooble(params, env);
-    } catch (err) {
+    const settled = await Promise.allSettled(sources.map((s) => s.query(params, env)));
+    const results = [];
+    const failed = [];
+    settled.forEach((outcome, i) => {
+      if (outcome.status === 'fulfilled') {
+        results.push(outcome.value);
+      } else {
+        console.error(`${sources[i].name} error:`, outcome.reason);
+        failed.push({ source: sources[i].name, error: outcome.reason });
+      }
+    });
+
+    if (!results.length) {
+      const err = failed[0].error;
       const status = err instanceof PublicError ? err.status : 502;
       const message =
         err instanceof PublicError
           ? err.message
           : 'No pudimos consultar las vacantes. Intenta de nuevo en unos minutos.';
-      console.error('Jooble error:', err);
       return json({ error: message, links }, status, cors);
     }
 
-    ctx.waitUntil(writeCache(key, data, ttl));
+    const data = {
+      total: results.reduce((sum, r) => sum + r.total, 0),
+      page: params.page,
+      hasMore: results.some((r) => r.hasMore),
+      jobs: dedupeJobs(interleave(...results.map((r) => r.jobs))),
+      sources: results.map((r) => r.source),
+      failedSources: failed.map((f) => f.source),
+    };
+
+    ctx.waitUntil(writeCache(key, data, failed.length ? PARTIAL_CACHE_TTL : ttl));
     return json({ ...data, links, cached: false }, 200, cors);
   },
 };
@@ -125,11 +159,9 @@ async function queryJooble(params, env) {
     body.datecreatedfrom = from.toISOString().slice(0, 10);
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), JOOBLE_TIMEOUT_MS);
-  let response;
-  try {
-    response = await fetch(`https://${host}/api/${encodeURIComponent(env.JOOBLE_API_KEY)}`, {
+  const response = await fetchWithTimeout(
+    `https://${host}/api/${encodeURIComponent(env.JOOBLE_API_KEY)}`,
+    {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -137,16 +169,9 @@ async function queryJooble(params, env) {
         'User-Agent': 'JobRadar/0.1 (+https://github.com/luis2d/jobradar)',
       },
       body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      throw new PublicError('Jooble tardó demasiado en responder. Intenta de nuevo.', 504);
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
+    },
+    JOOBLE_TIMEOUT_MS,
+  );
 
   // Jooble está detrás de Cloudflare: un reto anti-bots no significa que la clave sea mala.
   if (response.headers.get('cf-mitigated') === 'challenge') {
@@ -165,11 +190,71 @@ async function queryJooble(params, env) {
   const raw = await response.json();
   const total = Number(raw.totalCount) || 0;
   return {
+    source: 'Jooble',
     total,
     page: params.page,
     hasMore: params.page < MAX_PAGE && params.page * RESULTS_PER_PAGE < total,
     jobs: normalizeJobs(raw.jobs),
   };
+}
+
+async function queryAdzuna(params, env) {
+  if (Date.now() < adzunaPausedUntil) {
+    throw new PublicError('Adzuna está en pausa temporal.', 503);
+  }
+  const search = new URLSearchParams({
+    app_id: env.ADZUNA_APP_ID,
+    app_key: env.ADZUNA_APP_KEY,
+    results_per_page: String(RESULTS_PER_PAGE),
+    what: params.keywords,
+    'content-type': 'application/json',
+  });
+  if (params.location) search.set('where', params.location);
+  if (params.radius) search.set('distance', String(params.radius));
+  if (params.days !== null) search.set('max_days_old', String(params.days));
+  // El filtro del frontend es mensual; Adzuna trabaja con salario anual.
+  if (params.salary !== null) search.set('salary_min', String(params.salary * 12));
+
+  const url = `https://api.adzuna.com/v1/api/jobs/${ADZUNA_COUNTRY}/search/${params.page}?${search}`;
+  const response = await fetchWithTimeout(
+    url,
+    { headers: { Accept: 'application/json' } },
+    ADZUNA_TIMEOUT_MS,
+  );
+
+  // Credenciales rechazadas o cuota agotada: no insistimos durante un rato.
+  if (response.status === 401 || response.status === 403 || response.status === 429) {
+    adzunaPausedUntil = Date.now() + ADZUNA_PAUSE_MS;
+    throw new PublicError(`Adzuna rechazó la consulta (${response.status}).`, 502);
+  }
+  if (!response.ok) {
+    throw new Error(`Adzuna respondió ${response.status}`);
+  }
+
+  const raw = await response.json();
+  const total = Number(raw.count) || 0;
+  return {
+    source: 'Adzuna',
+    total,
+    page: params.page,
+    hasMore: params.page < MAX_PAGE && params.page * RESULTS_PER_PAGE < total,
+    jobs: normalizeJobs(raw.results, normalizeAdzunaJob),
+  };
+}
+
+async function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new PublicError('La fuente de vacantes tardó demasiado en responder.', 504);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Caché en dos niveles: memoria del isolate (muy rápida, se pierde al reciclarse)

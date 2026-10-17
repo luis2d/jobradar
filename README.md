@@ -14,7 +14,7 @@ Buscador de vacantes reales en línea. El usuario escribe una profesión (o elig
 - **Frontend:** HTML, CSS y JavaScript vanilla en un solo `index.html`.
 - **Backend:** función serverless (Cloudflare Workers, Vercel o Netlify Functions) que guarda la clave de API y llama a Jooble.
 - **Caché:** en memoria o con KV del proveedor, por algunos minutos u horas.
-- **Fuente de datos:** Jooble API (clave gratuita).
+- **Fuentes de datos:** Jooble API (clave gratuita) y Adzuna API (país `mx`; 25 llamadas de prueba, luego £8/mes). Si una fuente falla o se queda sin cuota, la página sigue con la otra.
 
 ## Estructura propuesta
 
@@ -48,7 +48,9 @@ npm run dev                 # abre http://127.0.0.1:8787
 npm test
 ```
 
-Para publicar: `npx wrangler login`, `npx wrangler secret put JOOBLE_API_KEY` y `npm run deploy`.
+Para publicar: `npx wrangler login`, `npx wrangler secret put JOOBLE_API_KEY` (y `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`) y `npm run deploy`.
+
+Versión publicada: https://jobradar.luis2d.workers.dev
 
 Si tu clave de Jooble es de un país específico, cambia `JOOBLE_HOST` en `wrangler.toml` (por ejemplo, `mx.jooble.org`).
 
@@ -56,7 +58,7 @@ Si tu clave de Jooble es de un país específico, cambia `JOOBLE_HOST` en `wrang
 
 `GET /api/search?keywords=contador&location=Guadalajara&page=1&radius=16&days=7&salary=15000`
 
-Devuelve `{ total, page, hasMore, jobs: [...], links: [...], cached }`. Cada vacante trae `title`, `company`, `location`, `salary` (o `null`), `type`, `snippet`, `date`, `url`, `via` y `origin`. Los errores responden `{ error, links }`.
+Devuelve `{ total, page, hasMore, jobs: [...], sources, failedSources, links: [...], cached }`. Cada vacante trae `title`, `company`, `location`, `salary` (o `null`), `type`, `snippet`, `date`, `url`, `via` y `origin`. Los errores responden `{ error, links }`.
 
 ## Pasos para iniciar (guía original)
 
@@ -92,7 +94,7 @@ Devuelve `{ total, page, hasMore, jobs: [...], links: [...], cached }`. Cada vac
 ## Limitaciones conocidas
 
 - Jooble puede no tener vacantes de todas las profesiones o ciudades.
-- Muchas vacantes no incluyen salario.
+- Muchas vacantes no incluyen salario. Adzuna publica salarios anuales; los estimados por Adzuna se muestran como "No especificado".
 - Una misma vacante puede aparecer repetida; la normalización debe eliminar duplicados por título y empresa.
 - Los límites del plan gratuito pueden cambiar. Revisa la documentación antes de escalar.
 
@@ -102,8 +104,10 @@ Devuelve `{ total, page, hasMore, jobs: [...], links: [...], cached }`. Cada vac
 - [x] Escribir `worker.js` y `normalize.js`.
 - [x] Conectar el buscador con el backend.
 - [x] Agregar caché y manejo de errores.
-- [ ] Revisar si Adzuna conviene como segunda fuente para otros países.
-- [ ] Publicar la versión de prueba.
+- [x] Revisar si Adzuna conviene como segunda fuente (sí trae vacantes locales de México).
+- [x] Publicar la versión de prueba.
+- [ ] Conseguir clave de Jooble con cobertura de México (la actual es del índice de EE. UU.).
+- [ ] Decidir si se paga el plan de Adzuna cuando se acaben las llamadas de prueba.
 
 ## Licencia
 
